@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -71,6 +72,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.LogLevel
 import com.example.data.model.UploadLogEntry
+import com.example.data.model.UploadMode
 import com.example.data.model.UploadStatus
 import com.example.ui.AppScreen
 import com.example.ui.MainViewModel
@@ -137,9 +139,10 @@ fun TransferScreen(
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 18.sp
                         )
-                        if (settings.uploadDestination.isNotBlank()) {
+                        if (settings.activeDestination.isNotBlank()) {
+                            val modeText = if (settings.uploadMode == UploadMode.USER_ACCOUNT) "Conta" else "Bot"
                             Text(
-                                text = "Destino: ${settings.uploadDestination}",
+                                text = "Modo $modeText • Destino: ${settings.activeDestination}",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.typography.bodySmall.color.copy(alpha = 0.7f)
                             )
@@ -601,7 +604,7 @@ fun TransferScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.navigationBarsPadding().height(36.dp))
         }
     }
 }

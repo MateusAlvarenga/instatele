@@ -48,8 +48,8 @@ object FileUtils {
                     val childDocId = cursor.getString(idIdx)
                     val name = cursor.getString(nameIdx) ?: continue
                     val mime = cursor.getString(mimeIdx)
-                    val size = if (sizeIdx >= 0) cursor.getLong(sizeIdx) else 0L
-                    val flags = if (flagsIdx >= 0) cursor.getInt(flagsIdx) else 0
+                    val size = if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) cursor.getLong(sizeIdx) else 0L
+                    val flags = if (flagsIdx >= 0 && !cursor.isNull(flagsIdx)) cursor.getInt(flagsIdx) else 0
 
                     // Check if it's a directory
                     if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
@@ -67,7 +67,15 @@ object FileUtils {
                         if (resolvedSize <= 0L) {
                             try {
                                 context.contentResolver.openFileDescriptor(fileDocUri, "r")?.use { pfd ->
-                                    resolvedSize = pfd.statSize
+                                    if (pfd.statSize > 0L) resolvedSize = pfd.statSize
+                                }
+                            } catch (_: Exception) {}
+                        }
+                        if (resolvedSize <= 0L) {
+                            try {
+                                context.contentResolver.openInputStream(fileDocUri)?.use { stream ->
+                                    val avail = stream.available().toLong()
+                                    if (avail > 0L) resolvedSize = avail
                                 }
                             } catch (_: Exception) {}
                         }

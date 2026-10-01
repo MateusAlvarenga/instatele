@@ -243,13 +243,18 @@ class TelegramApiClient(
                 }
 
                 if (!response.isSuccessful) {
-                    val errorDesc = parseErrorDescription(bodyStr) ?: "HTTP ${response.code} ${response.message}"
-                    // Non-retryable errors like payload too large, file too big or client bad request
-                    if (response.code == 400 || response.code == 413 ||
-                        errorDesc.contains("too big", ignoreCase = true) ||
-                        errorDesc.contains("Too Large", ignoreCase = true)
-                    ) {
-                        return Result.failure(IOException("Arquivo excede limite do Telegram: $errorDesc"))
+                    val errorDesc = parseErrorDescription(bodyStr) ?: "HTTP ${response.code} ${response.message}".trim()
+                    val isSizeLimit = response.code == 413 ||
+                            errorDesc.contains("too big", ignoreCase = true) ||
+                            errorDesc.contains("too large", ignoreCase = true) ||
+                            errorDesc.contains("file_parts_invalid", ignoreCase = true) ||
+                            bodyStr.contains("413", ignoreCase = true) ||
+                            bodyStr.contains("Payload Too Large", ignoreCase = true) ||
+                            bodyStr.contains("Entity Too Large", ignoreCase = true) ||
+                            bodyStr.contains("file is too big", ignoreCase = true)
+
+                    if (isSizeLimit) {
+                        return Result.failure(IOException("EXCEDE_LIMITE_50MB: $errorDesc"))
                     }
                     return Result.failure(IOException(errorDesc))
                 }
@@ -259,8 +264,12 @@ class TelegramApiClient(
                     return Result.success(parseSuccess(json))
                 } else {
                     val desc = json.optString("description", "Erro desconhecido do Telegram")
-                    if (desc.contains("too big", ignoreCase = true) || desc.contains("Too Large", ignoreCase = true)) {
-                        return Result.failure(IOException("Arquivo excede limite do Telegram: $desc"))
+                    val isSizeLimit = desc.contains("too big", ignoreCase = true) ||
+                            desc.contains("too large", ignoreCase = true) ||
+                            desc.contains("file_parts_invalid", ignoreCase = true) ||
+                            desc.contains("413", ignoreCase = true)
+                    if (isSizeLimit) {
+                        return Result.failure(IOException("EXCEDE_LIMITE_50MB: $desc"))
                     }
                     return Result.failure(IOException(desc))
                 }

@@ -11,7 +11,9 @@ import com.example.data.model.LogLevel
 import com.example.data.model.ScannedMediaFile
 import com.example.data.model.TELEGRAM_BOT_API_MAX_FILE_SIZE
 import com.example.data.model.UploadLogEntry
+import com.example.data.model.UploadMode
 import com.example.data.model.UploadStatus
+import com.example.data.model.UserSessionInfo
 import com.example.data.repository.TelegramRepository
 import com.example.data.repository.UploadRepository
 import com.example.data.telegram.SkipException
@@ -52,6 +54,34 @@ class UploadManager(
     private var lastBytesCount = 0L
     private var currentSpeedBps = 0L
 
+    private fun getRealFileSize(context: Context, file: ScannedMediaFile): Long {
+        if (file.sizeBytes > 0L) return file.sizeBytes
+        try {
+            context.contentResolver.openFileDescriptor(file.uri, "r")?.use { pfd ->
+                if (pfd.statSize > 0L) return pfd.statSize
+            }
+        } catch (_: Exception) {}
+        try {
+            context.contentResolver.openInputStream(file.uri)?.use { stream ->
+                val bytes = stream.available().toLong()
+                if (bytes > 0L) return bytes
+            }
+        } catch (_: Exception) {}
+        return file.sizeBytes
+    }
+
+    private fun isSizeLimitError(e: Throwable?): Boolean {
+        if (e == null) return false
+        val msg = e.message ?: ""
+        return msg.contains("EXCEDE_LIMITE_50MB", ignoreCase = true) ||
+                msg.contains("too big", ignoreCase = true) ||
+                msg.contains("Too Large", ignoreCase = true) ||
+                msg.contains("Entity Too Large", ignoreCase = true) ||
+                msg.contains("Payload Too Large", ignoreCase = true) ||
+                msg.contains("413", ignoreCase = true) ||
+                msg.contains("excede limite", ignoreCase = true)
+    }
+
     fun startUpload(
         batches: List<InstagramProfileBatch>,
         settings: ArchiverSettings,
@@ -88,6 +118,29 @@ class UploadManager(
             var currentFileCounter = 0
             var cumulativeBytesUploaded = 0L
 
+            val isUserMode = settings.uploadMode == UploadMode.USER_ACCOUNT
+            val destination = if (isUserMode) settings.userUploadDestination else settings.uploadDestination
+            val userSession = UserSessionInfo(
+                isValid = settings.isUserSessionValid,
+                phoneNumber = settings.userPhoneNumber,
+                firstName = settings.userAccountName,
+                username = settings.userAccountUsername,
+                sessionString = settings.userSessionString,
+                dcId = settings.userDcId
+            )
+
+            if (isUserMode && (!userSession.isValid || userSession.sessionString.isBlank())) {
+                _progress.update {
+                    it.copy(
+                        isRunning = false,
+                        statusMessage = "Sessão de usuário não está ativa. Conecte sua conta nas Configurações.",
+                        currentStatus = UploadStatus.FAILED
+                    )
+                }
+                addLog(LogLevel.ERROR, "Sessão de usuário não configurada ou inválida. Por favor, acesse as Configurações para conectar sua conta.")
+                return@launch
+            }
+
             uploadRepository.insertSession(
                 UploadSessionEntity(
                     sessionId = sessionId,
@@ -98,7 +151,7 @@ class UploadManager(
                     failedCount = 0,
                     totalBytes = totalBytes,
                     autoDeleteEnabled = settings.autoDeleteLocal,
-                    destination = settings.uploadDestination,
+                    destination = destination,
                     status = "RUNNING",
                     startTime = System.currentTimeMillis()
                 )
@@ -120,22 +173,24 @@ class UploadManager(
                         if (isCancelledFlag.get()) break
                         currentLotOverallIndex++
 
-                        // Telegram Bot API limit: 50MB on standard api.telegram.org, 2GB on custom local server
-                        val maxAllowedBytes = if (settings.botApiBaseUrl.contains("api.telegram.org", ignoreCase = true)) {
-                            TELEGRAM_BOT_API_MAX_FILE_SIZE // 50 MB
+                        // Max file size: 2GB for user account, 50MB for standard Bot API
+                        val maxAllowedBytes = if (isUserMode) {
+                            2000L * 1024L * 1024L // 2 GB for Telegram User Account
                         } else {
-                            2000L * 1024L * 1024L // 2 GB
+                            TELEGRAM_BOT_API_MAX_FILE_SIZE // 50 MB
                         }
 
-                        // 1. Separate valid files from oversized files
+                        // 1. Resolve real file size and separate valid files from oversized files
                         val validFiles = mutableListOf<ScannedMediaFile>()
                         val oversizedFiles = mutableListOf<ScannedMediaFile>()
 
                         for (f in lot.files) {
-                            if (f.sizeBytes > maxAllowedBytes) {
-                                oversizedFiles.add(f)
+                            val realSize = getRealFileSize(context, f)
+                            val fileWithRealSize = if (realSize > 0L) f.copy(sizeBytes = realSize) else f
+                            if (fileWithRealSize.sizeBytes > maxAllowedBytes) {
+                                oversizedFiles.add(fileWithRealSize)
                             } else {
-                                validFiles.add(f)
+                                validFiles.add(fileWithRealSize)
                             }
                         }
 
@@ -147,7 +202,7 @@ class UploadManager(
 
                             val sizeFormatted = InstagramParser.formatFileSize(oversized.sizeBytes)
                             val maxFormatted = InstagramParser.formatFileSize(maxAllowedBytes)
-                            val reason = "Excede o limite de $maxFormatted do Telegram Bot API ($sizeFormatted)"
+                            val reason = "Excede o limite de $maxFormatted do Telegram ($sizeFormatted)"
 
                             uploadRepository.insertRecord(
                                 UploadRecordEntity(
@@ -167,7 +222,7 @@ class UploadManager(
 
                             addLog(
                                 LogLevel.SKIP,
-                                "⏭ Arquivo '${oversized.name}' ($sizeFormatted) pulado: excede o limite de $maxFormatted do Telegram Bot API.",
+                                "⏭ Arquivo '${oversized.name}' ($sizeFormatted) pulado: excede o limite de $maxFormatted do Telegram.",
                                 username = batch.username,
                                 fileName = oversized.name
                             )
@@ -219,9 +274,30 @@ class UploadManager(
                             )
                         }
 
-                        // Chunk only valid files into media groups (Telegram max 10 files per message)
+                        // Chunk only valid files into media groups:
+                        // Telegram max 10 files per message.
+                        // In Bot mode, limit album total to 48MB to avoid 413 HTTP payload too large error!
                         val albumLimit = settings.itemsPerAlbum.coerceIn(2, 10)
-                        val groups = validFiles.chunked(albumLimit)
+                        val maxAlbumBytes = if (isUserMode) 2000L * 1024L * 1024L else 48L * 1024L * 1024L
+
+                        val groups = mutableListOf<List<ScannedMediaFile>>()
+                        var curGroup = mutableListOf<ScannedMediaFile>()
+                        var curGroupBytes = 0L
+
+                        for (vf in validFiles) {
+                            val willExceedCount = curGroup.size >= albumLimit
+                            val willExceedBytes = !isUserMode && (curGroupBytes + vf.sizeBytes > maxAlbumBytes) && curGroup.isNotEmpty()
+                            if (willExceedCount || willExceedBytes) {
+                                groups.add(curGroup)
+                                curGroup = mutableListOf()
+                                curGroupBytes = 0L
+                            }
+                            curGroup.add(vf)
+                            curGroupBytes += vf.sizeBytes
+                        }
+                        if (curGroup.isNotEmpty()) {
+                            groups.add(curGroup)
+                        }
 
                         for ((groupIndex, groupFiles) in groups.withIndex()) {
                             if (isCancelledFlag.get()) break
@@ -278,52 +354,100 @@ class UploadManager(
 
                             val result: Result<Boolean> = try {
                                 if (groupFiles.size > 1) {
-                                    telegramRepository.sendMediaGroup(
-                                        context = context,
-                                        botToken = settings.botToken,
-                                        chatId = settings.uploadDestination,
-                                        files = groupFiles,
-                                        caption = caption,
-                                        baseUrl = settings.botApiBaseUrl,
-                                        onProgress = { written, total ->
-                                            groupUploadedBytes = written
-                                            calculateSpeed(written)
-                                            _progress.update { curr ->
-                                                curr.copy(
-                                                    fileBytesUploaded = written,
-                                                    fileBytesTotal = if (total > 0) total else groupTotalBytes,
-                                                    totalBytesUploaded = cumulativeBytesUploaded + written,
-                                                    uploadSpeedBytesPerSec = currentSpeedBps
-                                                )
-                                            }
-                                        },
-                                        isCancelled = { isCancelledFlag.get() },
-                                        isSkipped = { isSkippedFlag.get() }
-                                    )
+                                    if (isUserMode) {
+                                        telegramRepository.sendUserMediaGroup(
+                                            context = context,
+                                            session = userSession,
+                                            destination = destination,
+                                            files = groupFiles,
+                                            caption = caption,
+                                            onProgress = { written, total ->
+                                                groupUploadedBytes = written
+                                                calculateSpeed(written)
+                                                _progress.update { curr ->
+                                                    curr.copy(
+                                                        fileBytesUploaded = written,
+                                                        fileBytesTotal = if (total > 0) total else groupTotalBytes,
+                                                        totalBytesUploaded = cumulativeBytesUploaded + written,
+                                                        uploadSpeedBytesPerSec = currentSpeedBps
+                                                    )
+                                                }
+                                            },
+                                            isCancelled = { isCancelledFlag.get() },
+                                            isSkipped = { isSkippedFlag.get() }
+                                        )
+                                    } else {
+                                        telegramRepository.sendMediaGroup(
+                                            context = context,
+                                            botToken = settings.botToken,
+                                            chatId = destination,
+                                            files = groupFiles,
+                                            caption = caption,
+                                            baseUrl = settings.botApiBaseUrl,
+                                            onProgress = { written, total ->
+                                                groupUploadedBytes = written
+                                                calculateSpeed(written)
+                                                _progress.update { curr ->
+                                                    curr.copy(
+                                                        fileBytesUploaded = written,
+                                                        fileBytesTotal = if (total > 0) total else groupTotalBytes,
+                                                        totalBytesUploaded = cumulativeBytesUploaded + written,
+                                                        uploadSpeedBytesPerSec = currentSpeedBps
+                                                    )
+                                                }
+                                            },
+                                            isCancelled = { isCancelledFlag.get() },
+                                            isSkipped = { isSkippedFlag.get() }
+                                        )
+                                    }
                                 } else {
                                     val singleFile = groupFiles.first()
-                                    telegramRepository.sendSingleMedia(
-                                        context = context,
-                                        botToken = settings.botToken,
-                                        chatId = settings.uploadDestination,
-                                        file = singleFile,
-                                        caption = caption,
-                                        baseUrl = settings.botApiBaseUrl,
-                                        onProgress = { written, total ->
-                                            groupUploadedBytes = written
-                                            calculateSpeed(written)
-                                            _progress.update { curr ->
-                                                curr.copy(
-                                                    fileBytesUploaded = written,
-                                                    fileBytesTotal = if (total > 0) total else singleFile.sizeBytes,
-                                                    totalBytesUploaded = cumulativeBytesUploaded + written,
-                                                    uploadSpeedBytesPerSec = currentSpeedBps
-                                                )
-                                            }
-                                        },
-                                        isCancelled = { isCancelledFlag.get() },
-                                        isSkipped = { isSkippedFlag.get() }
-                                    )
+                                    if (isUserMode) {
+                                        telegramRepository.sendUserSingleMedia(
+                                            context = context,
+                                            session = userSession,
+                                            destination = destination,
+                                            file = singleFile,
+                                            caption = caption,
+                                            onProgress = { written, total ->
+                                                groupUploadedBytes = written
+                                                calculateSpeed(written)
+                                                _progress.update { curr ->
+                                                    curr.copy(
+                                                        fileBytesUploaded = written,
+                                                        fileBytesTotal = if (total > 0) total else singleFile.sizeBytes,
+                                                        totalBytesUploaded = cumulativeBytesUploaded + written,
+                                                        uploadSpeedBytesPerSec = currentSpeedBps
+                                                    )
+                                                }
+                                            },
+                                            isCancelled = { isCancelledFlag.get() },
+                                            isSkipped = { isSkippedFlag.get() }
+                                        )
+                                    } else {
+                                        telegramRepository.sendSingleMedia(
+                                            context = context,
+                                            botToken = settings.botToken,
+                                            chatId = destination,
+                                            file = singleFile,
+                                            caption = caption,
+                                            baseUrl = settings.botApiBaseUrl,
+                                            onProgress = { written, total ->
+                                                groupUploadedBytes = written
+                                                calculateSpeed(written)
+                                                _progress.update { curr ->
+                                                    curr.copy(
+                                                        fileBytesUploaded = written,
+                                                        fileBytesTotal = if (total > 0) total else singleFile.sizeBytes,
+                                                        totalBytesUploaded = cumulativeBytesUploaded + written,
+                                                        uploadSpeedBytesPerSec = currentSpeedBps
+                                                    )
+                                                }
+                                            },
+                                            isCancelled = { isCancelledFlag.get() },
+                                            isSkipped = { isSkippedFlag.get() }
+                                        )
+                                    }
                                 }
                             } catch (e: SkipException) {
                                 Result.failure(e)
@@ -470,26 +594,48 @@ class UploadManager(
                                             includeLink = settings.includeInstagramLink
                                         )
 
-                                        val singleResult = telegramRepository.sendSingleMedia(
-                                            context = context,
-                                            botToken = settings.botToken,
-                                            chatId = settings.uploadDestination,
-                                            file = singleFile,
-                                            caption = singleCaption,
-                                            baseUrl = settings.botApiBaseUrl,
-                                            onProgress = { written, _ ->
-                                                calculateSpeed(written)
-                                                _progress.update { curr ->
-                                                    curr.copy(
-                                                        fileBytesUploaded = written,
-                                                        fileBytesTotal = singleFile.sizeBytes,
-                                                        uploadSpeedBytesPerSec = currentSpeedBps
-                                                    )
-                                                }
-                                            },
-                                            isCancelled = { isCancelledFlag.get() },
-                                            isSkipped = { isSkippedFlag.get() }
-                                        )
+                                        val singleResult = if (isUserMode) {
+                                            telegramRepository.sendUserSingleMedia(
+                                                context = context,
+                                                session = userSession,
+                                                destination = destination,
+                                                file = singleFile,
+                                                caption = singleCaption,
+                                                onProgress = { written, _ ->
+                                                    calculateSpeed(written)
+                                                    _progress.update { curr ->
+                                                        curr.copy(
+                                                            fileBytesUploaded = written,
+                                                            fileBytesTotal = singleFile.sizeBytes,
+                                                            uploadSpeedBytesPerSec = currentSpeedBps
+                                                        )
+                                                    }
+                                                },
+                                                isCancelled = { isCancelledFlag.get() },
+                                                isSkipped = { isSkippedFlag.get() }
+                                            )
+                                        } else {
+                                            telegramRepository.sendSingleMedia(
+                                                context = context,
+                                                botToken = settings.botToken,
+                                                chatId = destination,
+                                                file = singleFile,
+                                                caption = singleCaption,
+                                                baseUrl = settings.botApiBaseUrl,
+                                                onProgress = { written, _ ->
+                                                    calculateSpeed(written)
+                                                    _progress.update { curr ->
+                                                        curr.copy(
+                                                            fileBytesUploaded = written,
+                                                            fileBytesTotal = singleFile.sizeBytes,
+                                                            uploadSpeedBytesPerSec = currentSpeedBps
+                                                        )
+                                                    }
+                                                },
+                                                isCancelled = { isCancelledFlag.get() },
+                                                isSkipped = { isSkippedFlag.get() }
+                                            )
+                                        }
 
                                         currentFileCounter++
                                         if (singleResult.isSuccess) {
@@ -518,8 +664,7 @@ class UploadManager(
                                         } else {
                                             val singleEx = singleResult.exceptionOrNull()
                                             val isSingleSkip = isSkippedFlag.get() || singleEx is SkipException
-                                            val isSizeErr = singleEx?.message?.contains("too big", ignoreCase = true) == true ||
-                                                    singleEx?.message?.contains("Too Large", ignoreCase = true) == true
+                                            val isSizeErr = isSizeLimitError(singleEx)
 
                                             if (isSingleSkip || isSizeErr) {
                                                 skippedCount++
@@ -566,7 +711,7 @@ class UploadManager(
                                     // Single file failed
                                     currentFileCounter += groupFiles.size
                                     val err = exception?.message ?: "Erro desconhecido"
-                                    val isSizeErr = err.contains("too big", ignoreCase = true) || err.contains("Too Large", ignoreCase = true)
+                                    val isSizeErr = isSizeLimitError(exception)
 
                                     if (isSizeErr) {
                                         skippedCount += groupFiles.size

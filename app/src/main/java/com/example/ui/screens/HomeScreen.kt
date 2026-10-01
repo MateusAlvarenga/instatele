@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -15,12 +16,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,9 +37,11 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -49,6 +54,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -78,6 +84,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.data.model.InstagramProfileBatch
 import com.example.data.model.MediaType
+import com.example.data.model.TELEGRAM_BOT_API_MAX_FILE_SIZE
+import com.example.data.model.UploadMode
 import com.example.ui.MainViewModel
 import com.example.ui.theme.InstagramOrange
 import com.example.ui.theme.InstagramPink
@@ -105,10 +113,15 @@ fun HomeScreen(
     val totalFilesCount = remember(scannedBatches) { scannedBatches.sumOf { it.allFiles.size } }
     val totalLotsCount = remember(scannedBatches) { scannedBatches.sumOf { it.lots.size } }
     val totalBytesCount = remember(scannedBatches) { scannedBatches.sumOf { it.allFiles.sumOf { f -> f.sizeBytes } } }
-    val totalOversizedCount = remember(scannedBatches) { scannedBatches.sumOf { it.oversizedFilesCount } }
-    val totalValidCount = remember(scannedBatches) { scannedBatches.sumOf { it.validFilesCount } }
+    val maxAllowedBytes = if (settings.uploadMode == UploadMode.USER_ACCOUNT) 2000L * 1024L * 1024L else TELEGRAM_BOT_API_MAX_FILE_SIZE
+    val totalOversizedCount = remember(scannedBatches, settings.uploadMode) {
+        scannedBatches.sumOf { b -> b.allFiles.count { it.sizeBytes > maxAllowedBytes } }
+    }
+    val totalValidCount = remember(scannedBatches, settings.uploadMode) {
+        scannedBatches.sumOf { b -> b.allFiles.count { it.sizeBytes <= maxAllowedBytes } }
+    }
 
-    val isTelegramReady = settings.botToken.isNotBlank() && settings.uploadDestination.isNotBlank()
+    val isTelegramReady = settings.isReadyForUpload
 
     // SAF Folder Picker launcher
     val folderPickerLauncher = rememberLauncherForActivityResult(
@@ -186,13 +199,15 @@ fun HomeScreen(
             Surface(
                 tonalElevation = 8.dp,
                 shadowElevation = 8.dp,
-                color = MaterialTheme.colorScheme.surface
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .navigationBarsPadding()
+                        .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 48.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     if (progress.isRunning) {
                         Button(
@@ -213,6 +228,117 @@ fun HomeScreen(
                             Text("Acompanhar Transferência Ativa", fontWeight = FontWeight.Bold)
                         }
                     } else {
+                        // Radio button mode selector component before sending
+                        Card(
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Enviar via:",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = if (settings.uploadMode == UploadMode.USER_ACCOUNT) "Limite de até 2 GB" else "Limite de 50 MB",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (settings.uploadMode == UploadMode.USER_ACCOUNT) InstagramPurple else TelegramBlue,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .selectableGroup(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // Option 1: Bot do Telegram
+                                    Row(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                if (settings.uploadMode == UploadMode.BOT) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                                else Color.Transparent
+                                            )
+                                            .clickable { viewModel.switchUploadMode(UploadMode.BOT) }
+                                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = settings.uploadMode == UploadMode.BOT,
+                                            onClick = { viewModel.switchUploadMode(UploadMode.BOT) },
+                                            modifier = Modifier.testTag("radio_mode_bot")
+                                        )
+                                        Column {
+                                            Text(
+                                                text = "🤖 Bot",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = if (settings.uploadMode == UploadMode.BOT) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "Máx 50 MB",
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    // Option 2: Conta Própria
+                                    Row(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                if (settings.uploadMode == UploadMode.USER_ACCOUNT) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                                else Color.Transparent
+                                            )
+                                            .clickable { viewModel.switchUploadMode(UploadMode.USER_ACCOUNT) }
+                                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = settings.uploadMode == UploadMode.USER_ACCOUNT,
+                                            onClick = { viewModel.switchUploadMode(UploadMode.USER_ACCOUNT) },
+                                            modifier = Modifier.testTag("radio_mode_user")
+                                        )
+                                        Column {
+                                            Text(
+                                                text = "👤 Conta Própria",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = if (settings.uploadMode == UploadMode.USER_ACCOUNT) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = "Até 2 GB",
+                                                fontSize = 10.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        val sizeLimitLabel = if (settings.uploadMode == UploadMode.USER_ACCOUNT) "2 GB" else "50 MB"
+                        val modeLabel = if (settings.uploadMode == UploadMode.USER_ACCOUNT) "via Conta Própria" else "via Bot"
+
                         Button(
                             onClick = {
                                 if (isTelegramReady) {
@@ -225,7 +351,9 @@ fun HomeScreen(
                             enabled = if (!isTelegramReady) true else totalValidCount > 0,
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isTelegramReady) TelegramBlue else MaterialTheme.colorScheme.primary
+                                containerColor = if (isTelegramReady) {
+                                    if (settings.uploadMode == UploadMode.USER_ACCOUNT) InstagramPurple else TelegramBlue
+                                } else MaterialTheme.colorScheme.primary
                             ),
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -239,10 +367,10 @@ fun HomeScreen(
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = when {
-                                    !isTelegramReady -> "Configurar Telegram para Iniciar"
-                                    totalValidCount == 0 && totalOversizedCount > 0 -> "Todos os $totalOversizedCount arquivos excedem 50 MB"
-                                    totalOversizedCount > 0 -> "Iniciar ($totalValidCount prontos • $totalOversizedCount > 50MB pulados)"
-                                    else -> "Iniciar Arquivamento ($totalValidCount itens • $totalLotsCount lotes)"
+                                    !isTelegramReady -> if (settings.uploadMode == UploadMode.USER_ACCOUNT) "Conectar Conta Telegram para Iniciar" else "Configurar Bot do Telegram para Iniciar"
+                                    totalValidCount == 0 && totalOversizedCount > 0 -> "Todos os $totalOversizedCount arquivos excedem $sizeLimitLabel"
+                                    totalOversizedCount > 0 -> "Iniciar $modeLabel ($totalValidCount prontos • $totalOversizedCount > $sizeLimitLabel pulados)"
+                                    else -> "Iniciar Arquivamento $modeLabel ($totalValidCount itens • $totalLotsCount lotes)"
                                 },
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
@@ -285,13 +413,16 @@ fun HomeScreen(
                             )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "Telegram não configurado",
+                                    text = if (settings.uploadMode == UploadMode.USER_ACCOUNT) "Sessão de Usuário não conectada" else "Telegram não configurado",
                                     fontWeight = FontWeight.Bold,
                                     color = StatusWarning,
                                     style = MaterialTheme.typography.titleSmall
                                 )
                                 Text(
-                                    text = "Toque aqui para definir o Token do Bot e o Canal/Chat de destino antes de enviar.",
+                                    text = if (settings.uploadMode == UploadMode.USER_ACCOUNT)
+                                        "Toque aqui para conectar sua conta do Telegram via StringSession para enviar até 2 GB."
+                                    else
+                                        "Toque aqui para definir o Token do Bot e o Canal/Chat de destino antes de enviar.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
@@ -316,14 +447,15 @@ fun HomeScreen(
                                 modifier = Modifier.size(22.dp)
                             )
                             Column(modifier = Modifier.weight(1f)) {
+                                val modeLabel = if (settings.uploadMode == UploadMode.USER_ACCOUNT) "Conta de Usuário (até 2 GB)" else "Bot do Telegram (até 50 MB)"
                                 Text(
-                                    text = "Destino configurado",
+                                    text = modeLabel,
                                     fontWeight = FontWeight.SemiBold,
                                     fontSize = 12.sp,
                                     color = StatusSuccess
                                 )
                                 Text(
-                                    text = settings.uploadDestination,
+                                    text = settings.activeDestination,
                                     fontWeight = FontWeight.Bold,
                                     style = MaterialTheme.typography.bodyMedium
                                 )
@@ -439,6 +571,162 @@ fun HomeScreen(
                 }
             }
 
+            // Modo de Envio (Radio: Bot vs Conta Própria)
+            item {
+                Card(
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .selectableGroup(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.Send,
+                                contentDescription = null,
+                                tint = TelegramBlue,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Text(
+                                text = "Modo de Upload para o Telegram",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Text(
+                            text = "Selecione por onde deseja realizar o envio antes de iniciar a transferência:",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // Option 1: Bot Radio
+                        val isBot = settings.uploadMode == UploadMode.BOT
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isBot) TelegramBlue.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface,
+                            border = if (isBot) BorderStroke(1.5.dp, TelegramBlue) else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.switchUploadMode(UploadMode.BOT) }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                RadioButton(
+                                    selected = isBot,
+                                    onClick = { viewModel.switchUploadMode(UploadMode.BOT) },
+                                    modifier = Modifier.testTag("radio_mode_bot")
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(Icons.Filled.SmartToy, contentDescription = null, tint = TelegramBlue, modifier = Modifier.size(16.dp))
+                                        Text(
+                                            text = "Enviar via Bot do Telegram",
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
+                                    Text(
+                                        text = "Usa token de Bot • Limite de até 50 MB por arquivo",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (settings.botToken.isNotBlank()) {
+                                        Text(
+                                            text = "Destino: ${settings.uploadDestination.ifBlank { "Canal/Chat não definido" }}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = StatusSuccess,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "⚠️ Token do bot não configurado (toque no banner acima)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = StatusWarning,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Option 2: User Account Radio
+                        val isUser = settings.uploadMode == UploadMode.USER_ACCOUNT
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isUser) InstagramPurple.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface,
+                            border = if (isUser) BorderStroke(1.5.dp, InstagramPurple) else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { viewModel.switchUploadMode(UploadMode.USER_ACCOUNT) }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                RadioButton(
+                                    selected = isUser,
+                                    onClick = { viewModel.switchUploadMode(UploadMode.USER_ACCOUNT) },
+                                    modifier = Modifier.testTag("radio_mode_user")
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Icon(Icons.Filled.Person, contentDescription = null, tint = InstagramPurple, modifier = Modifier.size(16.dp))
+                                        Text(
+                                            text = "Enviar via Conta Própria (Telethon)",
+                                            fontWeight = FontWeight.Bold,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                    }
+                                    Text(
+                                        text = "Upload direto da sua conta • Suporta até 2 GB por arquivo",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (settings.isUserSessionValid) {
+                                        Text(
+                                            text = "Conectado: ${settings.userAccountName.ifBlank { settings.userPhoneNumber }} • ${if (settings.userUploadDestination == "me") "Mensagens Salvas (me)" else settings.userUploadDestination}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = StatusSuccess,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    } else {
+                                        Text(
+                                            text = "⚠️ Sessão não conectada (toque no banner para conectar)",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = StatusWarning,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Pre-Transfer Options Card (Autodelete toggle, lot rules)
             item {
                 Card(
@@ -548,14 +836,19 @@ fun HomeScreen(
                                     modifier = Modifier.size(28.dp)
                                 )
                                 Column(modifier = Modifier.weight(1f)) {
+                                    val sizeLimitLabel = if (settings.uploadMode == UploadMode.USER_ACCOUNT) "2 GB" else "50 MB"
                                     Text(
-                                        text = "$totalOversizedCount arquivo(s) > 50 MB detectado(s)",
+                                        text = "$totalOversizedCount arquivo(s) > $sizeLimitLabel detectado(s)",
                                         fontWeight = FontWeight.Bold,
                                         color = StatusWarning,
                                         style = MaterialTheme.typography.titleSmall
                                     )
                                     Text(
-                                        text = "O Telegram Bot API não aceita arquivos maiores que 50 MB. O app pulará automaticamente esses arquivos para garantir que o restante do lote seja enviado com sucesso sem falhas.",
+                                        text = if (settings.uploadMode == UploadMode.USER_ACCOUNT) {
+                                            "Arquivos maiores que 2 GB excedem o limite do Telegram e serão automaticamente pulados para não interromper a transferência."
+                                        } else {
+                                            "O Telegram Bot API não aceita arquivos maiores que 50 MB. O app pulará automaticamente esses arquivos para garantir que o restante do lote seja enviado com sucesso sem falhas."
+                                        },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
