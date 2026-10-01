@@ -1,0 +1,6 @@
+{
+  "name": "InstaTele Archiver",
+  "description": "Archive Instagram photos and videos directly to Telegram channels with smart username grouping, batch lots, and detailed transfer progress.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
