@@ -412,22 +412,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun startArchiving(): Boolean {
         val currentSettings = settings.value
-        val isUserMode = currentSettings.uploadMode == UploadMode.USER_ACCOUNT
 
-        if (isUserMode) {
-            if (!currentSettings.isUserSessionValid || currentSettings.userSessionString.isBlank()) {
-                return false
-            }
-            if (currentSettings.userUploadDestination.isBlank()) {
-                return false
-            }
-        } else {
-            if (currentSettings.botToken.isBlank()) {
-                return false
-            }
-            if (currentSettings.uploadDestination.isBlank()) {
-                return false
-            }
+        if (!currentSettings.isReadyForUpload) {
+            return false
         }
 
         if (_scannedBatches.value.isEmpty()) {

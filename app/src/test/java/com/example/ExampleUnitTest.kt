@@ -11,6 +11,7 @@ import com.example.util.FileUtils
 import com.example.util.InstagramParser
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -226,5 +227,43 @@ class ExampleUnitTest {
         val pythonSnippet = "session = '$telethonString'"
         val res3 = client.importStringSession(pythonSnippet)
         assertTrue(res3 is com.example.data.telegram.UserSignInResult.Success)
+
+        // Verify parseStringSession extracts correct ip, port, dcId
+        val parseRes = client.parseStringSession(telethonString)
+        assertTrue(parseRes.isSuccess)
+        val parsed = parseRes.getOrNull()!!
+        assertEquals(4, parsed.dcId)
+        assertEquals(263, parsed.bytesCount)
+        assertNotNull(parsed.authKey)
+        assertEquals(256, parsed.authKey!!.size)
+    }
+
+    @Test
+    fun testAesIgeRoundTrip() {
+        val key = ByteArray(32) { (it * 7).toByte() }
+        val iv = ByteArray(32) { (it * 13).toByte() }
+        val plain = "Hello Telegram MTProto 2.0 IGE Encryption!".toByteArray(Charsets.UTF_8)
+        // Pad to multiple of 16
+        val padLen = (16 - (plain.size % 16)) % 16
+        val paddedPlain = plain.copyOf(plain.size + padLen)
+
+        val cipher = com.example.data.telegram.TelegramUserClient.AesIge.encrypt(paddedPlain, key, iv)
+        assertEquals(paddedPlain.size, cipher.size)
+        // Ensure ciphertext is different from plaintext
+        assertFalse(paddedPlain.contentEquals(cipher))
+
+        val decrypted = com.example.data.telegram.TelegramUserClient.AesIge.decrypt(cipher, key, iv)
+        assertTrue(paddedPlain.contentEquals(decrypted))
+    }
+
+    @Test
+    fun testTelegramMessageIdPositiveAndAligned() {
+        val nowSec = System.currentTimeMillis() / 1000L
+        val nanos = ((System.currentTimeMillis() % 1000L) * 1_000_000L)
+        val msgId = ((nowSec shl 32) or ((nanos and 0xFFFFFFFFL) shl 2)) and -4L
+
+        assertTrue(msgId > 0)
+        assertEquals(0L, msgId and 3L) // Must be multiple of 4 for client queries
+        assertEquals(nowSec, msgId ushr 32) // Upper 32 bits must strictly match unix timestamp in seconds
     }
 }

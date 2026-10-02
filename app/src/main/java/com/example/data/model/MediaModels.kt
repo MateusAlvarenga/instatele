@@ -58,6 +58,9 @@ data class MediaLot(
     val totalSizeBytes: Long get() = files.sumOf { it.sizeBytes }
     val validFilesCount: Int get() = files.count { !it.isOversizedForStandardBot }
     val oversizedFilesCount: Int get() = files.count { it.isOversizedForStandardBot }
+
+    fun validCount(maxBytes: Long): Int = files.count { it.sizeBytes <= maxBytes }
+    fun oversizedCount(maxBytes: Long): Int = files.count { it.sizeBytes > maxBytes }
 }
 
 data class InstagramProfileBatch(
@@ -69,6 +72,9 @@ data class InstagramProfileBatch(
     val totalSizeBytes: Long get() = allFiles.sumOf { it.sizeBytes }
     val validFilesCount: Int get() = allFiles.count { !it.isOversizedForStandardBot }
     val oversizedFilesCount: Int get() = allFiles.count { it.isOversizedForStandardBot }
+
+    fun validCount(maxBytes: Long): Int = allFiles.count { it.sizeBytes <= maxBytes }
+    fun oversizedCount(maxBytes: Long): Int = allFiles.count { it.sizeBytes > maxBytes }
 }
 
 data class LiveUploadProgress(

@@ -124,6 +124,14 @@ class TelegramRepository(
         return userClient.validateSession(sessionString, apiId, apiHash)
     }
 
+    suspend fun sendUserMessage(
+        session: UserSessionInfo,
+        destination: String,
+        message: String
+    ): Result<Boolean> {
+        return userClient.sendUserMessage(session, destination, message)
+    }
+
     suspend fun sendUserMediaGroup(
         context: Context,
         session: UserSessionInfo,

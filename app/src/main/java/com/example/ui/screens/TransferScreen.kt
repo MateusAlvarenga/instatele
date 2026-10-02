@@ -247,12 +247,14 @@ fun TransferScreen(
                             progress.isPaused -> StatusWarning
                             progress.isRunning -> TelegramBlue
                             progress.currentStatus == UploadStatus.SUCCESS -> StatusSuccess
+                            progress.currentStatus == UploadStatus.FAILED -> StatusError
                             else -> MaterialTheme.colorScheme.outline
                         }
                         val badgeText = when {
                             progress.isPaused -> "PAUSADO"
                             progress.isRunning -> "ENVIANDO"
                             progress.currentStatus == UploadStatus.SUCCESS -> "CONCLUÍDO"
+                            progress.currentStatus == UploadStatus.FAILED -> "FALHOU"
                             else -> "PARADO"
                         }
                         Surface(
@@ -470,9 +472,13 @@ fun TransferScreen(
 
             // Done Summary Card (when finished)
             AnimatedVisibility(visible = !progress.isRunning && progress.currentFileIndex > 0) {
+                val isFailed = progress.currentStatus == UploadStatus.FAILED
                 Card(
                     shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (isFailed) StatusError.copy(alpha = 0.12f)
+                        else MaterialTheme.colorScheme.surfaceVariant
+                    ),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -484,21 +490,23 @@ fun TransferScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Filled.Check,
+                                imageVector = if (isFailed) Icons.Filled.Error else Icons.Filled.Check,
                                 contentDescription = null,
-                                tint = StatusSuccess,
+                                tint = if (isFailed) StatusError else StatusSuccess,
                                 modifier = Modifier.size(24.dp)
                             )
                             Text(
                                 text = progress.statusMessage,
                                 style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = if (isFailed) StatusError else MaterialTheme.colorScheme.onSurface
                             )
                         }
 
                         Text(
-                            text = "Arquivos processados: ${progress.currentFileIndex} de ${progress.totalFiles}.",
-                            style = MaterialTheme.typography.bodySmall
+                            text = "Enviados: ${progress.totalSuccess} • Pulados: ${progress.totalSkipped} • Falhas: ${progress.totalFailed}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium
                         )
 
                         Row(
